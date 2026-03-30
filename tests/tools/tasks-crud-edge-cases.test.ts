@@ -48,6 +48,27 @@ describe('Tasks CRUD - Edge Cases and Defensive Programming', () => {
   });
 
   describe('createTask edge cases', () => {
+    it('should preserve legitimate command-like and keyword-rich content', async () => {
+      const createdTask = { id: 101, title: 'Create via curl over SSH', project_id: 1 };
+      mockClient.tasks.createTask.mockResolvedValue(createdTask);
+      mockClient.tasks.getTask.mockResolvedValue({
+        ...createdTask,
+        description: 'Update/Delete docs: `curl /api/v1/tasks` && /tmp/path & config',
+      });
+
+      await createTask({
+        projectId: 1,
+        title: 'Create via curl over SSH',
+        description: 'Update/Delete docs: `curl /api/v1/tasks` && /tmp/path & config',
+      });
+
+      expect(mockClient.tasks.createTask).toHaveBeenCalledWith(1, {
+        title: 'Create via curl over SSH',
+        project_id: 1,
+        description: 'Update/Delete docs: `curl /api/v1/tasks` && /tmp/path & config',
+      });
+    });
+
     it('should handle empty description field correctly', async () => {
       const createdTask = { id: 1, title: 'Test Task', project_id: 1 };
       mockClient.tasks.createTask.mockResolvedValue(createdTask);

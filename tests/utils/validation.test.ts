@@ -18,7 +18,6 @@ import {
   validateId,
   validateAndConvertId
 } from '../../src/utils/validation';
-import { StorageDataError } from '../../src/utils/storage-errors';
 import { MCPError, ErrorCode } from '../../src/types/errors';
 
 describe('Security Validation Utilities', () => {
@@ -29,17 +28,9 @@ describe('Security Validation Utilities', () => {
       expect(result).toBe('This is a valid string');
     });
 
-    it('should escape HTML special characters (when not XSS)', () => {
-      const testCases = [
-        { input: 'Hello <world>', expected: 'Hello &lt;world&gt;' },
-        { input: 'Test "quoted" string', expected: 'Test &quot;quoted&quot; string' },
-        { input: "Test 'single' quotes", expected: 'Test &#x27;single&#x27; quotes' },
-        { input: 'path/to/file', expected: 'path&#x2F;to&#x2F;file' }
-      ];
-
-      testCases.forEach(({ input, expected }) => {
-        expect(sanitizeString(input)).toBe(expected);
-      });
+    it('should preserve special characters and code snippets unchanged', () => {
+      const input = 'Create/Update task & keep `<script>alert(1)</script>` as plain text';
+      expect(sanitizeString(input)).toBe(input);
     });
 
     it('should throw error for non-string values', () => {
@@ -57,58 +48,16 @@ describe('Security Validation Utilities', () => {
       );
     });
 
-    it('should detect and block XSS patterns', () => {
-      const xssPatterns = [
-        '<script>',
-        '<SCRIPT>',
-        '<img src=x onerror=alert(1)>',
-        '<body onload=alert(1)>',
+    it('should allow previously blocked content keywords', () => {
+      const samples = [
+        'Create ticket via curl for SSH rollout',
+        'Delete stale data and format report',
+        '<script>alert("xss")</script>',
         'javascript:alert(1)',
-        'JAVASCRIPT:alert(1)',
-        '<iframe>',
-        '<object>',
-        '<embed>',
-        '<link>',
-        '<meta>',
-        '<style>',
-        '<svg>',
-        '<!-- malicious script -->',
-        'expression(alert(1))',
-        'eval("malicious")',
-        'Function("malicious")',
-        '<div onmouseover="alert(1)">',
-        '<a href="javascript:alert(1)">',
-        'data:text/html,<script>alert(1)</script>',
-        'data:application/javascript,alert(1)'
       ];
-
-      // Test that all patterns throw errors
-      xssPatterns.forEach((pattern, index) => {
-        expect(() => sanitizeString(pattern)).toThrow(MCPError);
+      samples.forEach((sample) => {
+        expect(sanitizeString(sample)).toBe(sample);
       });
-    });
-
-    it('should detect XSS in HTML-encoded content', () => {
-      const encodedXss = [
-        '&lt;script&gt;alert(1)&lt;&#x2F;script&gt;',
-        '&lt;img src=x onerror=alert(1)&gt;',
-        '&lt;iframe&gt;',
-        '&lt;svg&gt;'
-      ];
-
-      encodedXss.forEach(pattern => {
-        expect(() => sanitizeString(pattern)).toThrow(MCPError);
-        expect(() => sanitizeString(pattern)).toThrow('String contains potentially dangerous content');
-      });
-    });
-
-    it('should reset regex lastIndex for global patterns', () => {
-      // Test multiple XSS detections to ensure regex state is properly reset
-      const xssString = '<script>alert(1)</script>';
-
-      for (let i = 0; i < 5; i++) {
-        expect(() => sanitizeString(xssString)).toThrow();
-      }
     });
   });
 
@@ -255,9 +204,9 @@ describe('Security Validation Utilities', () => {
       expect(() => validateValue(new Date())).toThrow(MCPError);
     });
 
-    it('should sanitize strings in arrays', () => {
+    it('should preserve strings in arrays without content blocking', () => {
       const arrayWithXss = ['<script>alert(1)</script>', 'normal string'];
-      expect(() => validateValue(arrayWithXss)).toThrow(MCPError);
+      expect(validateValue(arrayWithXss)).toEqual(arrayWithXss);
     });
   });
 
@@ -712,31 +661,10 @@ describe('Security Validation Utilities', () => {
     });
   });
 
-  describe('XSS Protection', () => {
-    it('should reject dangerous content with StorageDataError', () => {
-      // Current security approach: reject dangerous content rather than sanitize
-      const dangerousInputs = [
-        '<script>alert("xss")</script>',
-        'javascript:alert("xss")',
-        '<img src=x onerror=alert("xss")>',
-        '<svg onload=alert("xss")>',
-        '<iframe src="evil.com"></iframe>',
-        'onload="alert(1)"'
-      ];
-
-      dangerousInputs.forEach(input => {
-        expect(() => sanitizeString(input)).toThrow(MCPError);
-      });
-    });
-
-    it('should escape safe HTML content', () => {
-      // Test that safe HTML tags are escaped rather than stripped
-      const safeInput = '<b>Bold text</b><em>Emphasis</em>';
-      const result = sanitizeString(safeInput);
-      // HTML entities should be escaped
-      expect(result).toContain('&lt;b&gt;');
-      expect(result).toContain('&lt;em&gt;');
-      expect(typeof result).toBe('string');
+  describe('String Trust Boundary', () => {
+    it('should preserve HTML-like and command-like text as plain content', () => {
+      const input = '<b>Bold</b> && run `curl /api/v1/tasks`';
+      expect(sanitizeString(input)).toBe(input);
     });
   });
 });
