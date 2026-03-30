@@ -147,7 +147,13 @@ function normalizeSecurityKey(key: string): string {
   // Trim leading/trailing underscores
   normalized = normalized.replace(/^_+|_+$/g, '');
 
-  // Cache the result
+  // Cache the result, evict oldest entries if cache exceeds 10000
+  if (normalizedKeyCache.size >= 10000) {
+    const firstKey = normalizedKeyCache.keys().next().value;
+    if (firstKey !== undefined) {
+      normalizedKeyCache.delete(firstKey);
+    }
+  }
   normalizedKeyCache.set(key, normalized);
   return normalized;
 }

@@ -9,6 +9,7 @@ import { logger } from '../utils/logger';
 
 export class AuthManager {
   private session: AuthSession | null = null;
+  private refreshTimer: ReturnType<typeof setInterval> | null = null;
 
   /**
    * Detect authentication type based on token format
@@ -42,6 +43,43 @@ export class AuthManager {
       // tokenExpiry and userId are optional
     };
     logger.debug('AuthManager.connect - Session created successfully');
+
+    // Auto-refresh JWT tokens before they expire
+    if (detectedAuthType === 'jwt') {
+      this.startTokenRefresh();
+    }
+  }
+
+  /**
+   * Start automatic JWT token refresh (every 5 minutes)
+   */
+  private startTokenRefresh(): void {
+    if (this.refreshTimer) {
+      clearInterval(this.refreshTimer);
+    }
+    this.refreshTimer = setInterval(async () => {
+      if (!this.session || this.session.authType !== 'jwt') return;
+      try {
+        const response = await fetch(`${this.session.apiUrl}/user/token/refresh`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${this.session.apiToken}`,
+            'Content-Type': 'application/json',
+          },
+        });
+        if (response.ok) {
+          const data = await response.json() as { token?: string };
+          if (data.token) {
+            this.session.apiToken = data.token;
+            logger.debug('JWT token refreshed successfully');
+          }
+        } else {
+          logger.warn('JWT token refresh failed: %d', response.status);
+        }
+      } catch (error) {
+        logger.warn('JWT token refresh error:', error);
+      }
+    }, 5 * 60 * 1000); // Refresh every 5 minutes
   }
 
   /**
@@ -152,9 +190,9 @@ export class AuthManager {
    */
   private validateTestEnvironment(): void {
     const nodeEnv = process.env.NODE_ENV;
-    const jestRunning = process.env.JEST_WORKER_ID !== undefined || process.env.NODE_ENV === 'test';
+    const jestRunning = process.env.JEST_WORKER_ID !== undefined || nodeEnv === 'test';
 
-    if (!jestRunning && nodeEnv !== 'test' && nodeEnv !== 'development') {
+    if (!jestRunning && nodeEnv !== 'test') {
       throw new Error(
         'AuthManager test methods can only be used in test environments. ' +
         'This is a security measure to prevent testing methods from being accessible in production.'

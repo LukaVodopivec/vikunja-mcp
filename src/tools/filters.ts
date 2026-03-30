@@ -1,5 +1,6 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
+import { createHash } from 'crypto';
 import type { AuthManager } from '../auth/AuthManager';
 import type { VikunjaClientFactory } from '../client/VikunjaClientFactory';
 import { storageManager } from '../storage';
@@ -111,7 +112,7 @@ const ValidateFilterSchema = z.object({
  */
 async function getSessionStorage(authManager: AuthManager): ReturnType<typeof storageManager.getStorage> {
   const session = authManager.getSession();
-  const sessionId = session.apiToken ? `${session.apiUrl}:${session.apiToken.substring(0, 8)}` : 'anonymous';
+  const sessionId = session.apiToken ? createHash('sha256').update(session.apiToken).digest('hex').substring(0, 16) : 'anonymous';
   return storageManager.getStorage(sessionId, session.userId, session.apiUrl);
 }
 
