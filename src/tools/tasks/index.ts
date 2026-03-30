@@ -16,6 +16,7 @@ import { TaskFilteringOrchestrator } from './filtering';
 import type { TaskListingArgs } from './types/filters';
 import { createAuthRequiredError, handleFetchError } from '../../utils/error-handler';
 import { formatAorpAsMarkdown } from '../../utils/response-factory';
+import { buildSessionId } from '../../utils/session-id';
 
 
 // Import all operation handlers
@@ -32,7 +33,7 @@ import { applyLabels, removeLabels, listTaskLabels } from './labels';
  */
 async function getSessionStorage(authManager: AuthManager): ReturnType<typeof storageManager.getStorage> {
   const session = authManager.getSession();
-  const sessionId = session.apiToken ? `${session.apiUrl}:${session.apiToken.substring(0, 8)}` : 'anonymous';
+  const sessionId = buildSessionId(session.apiUrl, session.apiToken);
   return storageManager.getStorage(sessionId, session.userId, session.apiUrl);
 }
 

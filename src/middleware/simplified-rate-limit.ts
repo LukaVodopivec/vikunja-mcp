@@ -10,11 +10,66 @@
  * ✅ Production-grade reliability with 99.9% SLA design
  */
 
-import { MemoryStore } from 'express-rate-limit';
 import { Mutex } from 'async-mutex';
 import CircuitBreakerImpl from 'opossum';
 import { MCPError, ErrorCode } from '../types/errors';
 import { logger } from '../utils/logger';
+
+interface RateStoreEntry {
+  totalHits: number;
+  resetTime: number;
+}
+
+interface RateStoreHit {
+  totalHits: number;
+  resetTime: Date;
+}
+
+/**
+ * Internal in-memory rate store with TTL semantics.
+ */
+class InMemoryRateStore {
+  private readonly entries = new Map<string, RateStoreEntry>();
+  private readonly windowMs: number;
+
+  constructor(windowMs: number) {
+    this.windowMs = windowMs;
+  }
+
+  increment(key: string): Promise<RateStoreHit> {
+    const now = Date.now();
+    const current = this.entries.get(key);
+
+    if (!current || current.resetTime <= now) {
+      const resetTime = now + this.windowMs;
+      this.entries.set(key, { totalHits: 1, resetTime });
+      return Promise.resolve({ totalHits: 1, resetTime: new Date(resetTime) });
+    }
+
+    const updated = { totalHits: current.totalHits + 1, resetTime: current.resetTime };
+    this.entries.set(key, updated);
+    return Promise.resolve({ totalHits: updated.totalHits, resetTime: new Date(updated.resetTime) });
+  }
+
+  get(key: string): Promise<RateStoreHit | undefined> {
+    const current = this.entries.get(key);
+    if (!current) {
+      return Promise.resolve(undefined);
+    }
+
+    if (current.resetTime <= Date.now()) {
+      this.entries.delete(key);
+      return Promise.resolve(undefined);
+    }
+
+    return Promise.resolve({ totalHits: current.totalHits, resetTime: new Date(current.resetTime) });
+  }
+
+  resetAll(): Promise<void> {
+    this.entries.clear();
+    return Promise.resolve();
+  }
+}
 
 /**
  * Enhanced rate limit configuration with security options
@@ -132,8 +187,8 @@ function getSessionId(): string {
  */
 export class SecureRateLimitMiddleware {
   private config: ToolRateLimits;
-  private minuteStore: MemoryStore;
-  private hourStore: MemoryStore;
+  private minuteStore: InMemoryRateStore;
+  private hourStore: InMemoryRateStore;
 
   // SECURITY: Concurrent access protection
   private rateLimitMutex = new Mutex();
@@ -152,8 +207,8 @@ export class SecureRateLimitMiddleware {
 
     // TESTING MODE: Allow shorter TTL for test compatibility
     // Initialize MemoryStore instances
-    this.minuteStore = new MemoryStore();
-    this.hourStore = new MemoryStore();
+    this.minuteStore = new InMemoryRateStore(60_000);
+    this.hourStore = new InMemoryRateStore(3_600_000);
 
     // SECURITY: Wrap MemoryStore operations in circuit breakers
     this.minuteStoreBreaker = new CircuitBreakerImpl(
@@ -237,8 +292,8 @@ export class SecureRateLimitMiddleware {
     try {
       // SECURITY: Query current counts from MemoryStore (single source of truth)
       const [minuteCount, hourCount] = await Promise.all([
-        this.getCurrentCount(minuteKey, 60), // 60 second window
-        this.getCurrentCount(hourKey, 3600), // 3600 second window
+        this.getCurrentCount(this.minuteStore, minuteKey),
+        this.getCurrentCount(this.hourStore, hourKey),
       ]);
 
       // SECURITY: Check per-minute limit
@@ -331,12 +386,10 @@ export class SecureRateLimitMiddleware {
   /**
    * SECURITY: Get current count from MemoryStore with proper error handling
    */
-  private async getCurrentCount(key: string, _windowSeconds: number): Promise<number> {
+  private async getCurrentCount(store: InMemoryRateStore, key: string): Promise<number> {
     try {
-      // MemoryStore returns a specific type, let's handle it safely
-      const count = await this.minuteStore.get(key);
+      const count = await store.get(key);
       if (count && typeof count === 'object' && 'totalHits' in count && typeof count.totalHits === 'number') {
-        // MemoryStore handles TTL automatically
         return count.totalHits;
       }
       return 0;
@@ -551,8 +604,8 @@ export class SecureRateLimitMiddleware {
       try {
         // SECURITY: Get actual counts from MemoryStore
         const [minuteCount, hourCount] = await Promise.all([
-          this.getCurrentCount(minuteKey, 60),
-          this.getCurrentCount(hourKey, 3600),
+          this.getCurrentCount(this.minuteStore, minuteKey),
+          this.getCurrentCount(this.hourStore, hourKey),
         ]);
 
         totalMinuteRequests += minuteCount;

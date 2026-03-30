@@ -115,6 +115,32 @@ const UNICODE_NORMALIZATION_PATTERNS = [
 
 // Performance optimization: Cache normalized keys
 const normalizedKeyCache = new Map<string, string>();
+const SECURITY_KEY_CACHE_MAX_SIZE = 10000;
+
+function getCachedNormalizedKey(key: string): string | undefined {
+  const cachedValue = normalizedKeyCache.get(key);
+  if (cachedValue === undefined) {
+    return undefined;
+  }
+
+  // Refresh insertion order to provide LRU-style eviction.
+  normalizedKeyCache.delete(key);
+  normalizedKeyCache.set(key, cachedValue);
+  return cachedValue;
+}
+
+function setCachedNormalizedKey(key: string, normalizedValue: string): void {
+  if (normalizedKeyCache.has(key)) {
+    normalizedKeyCache.delete(key);
+  } else if (normalizedKeyCache.size >= SECURITY_KEY_CACHE_MAX_SIZE) {
+    const oldestKey = normalizedKeyCache.keys().next().value;
+    if (typeof oldestKey === 'string') {
+      normalizedKeyCache.delete(oldestKey);
+    }
+  }
+
+  normalizedKeyCache.set(key, normalizedValue);
+}
 
 /**
  * Normalizes a key for security checking by:
@@ -127,8 +153,9 @@ const normalizedKeyCache = new Map<string, string>();
  * @returns Normalized key safe for comparison
  */
 function normalizeSecurityKey(key: string): string {
-  if (normalizedKeyCache.has(key)) {
-    return normalizedKeyCache.get(key) as string;
+  const cachedKey = getCachedNormalizedKey(key);
+  if (cachedKey !== undefined) {
+    return cachedKey;
   }
 
   let normalized = key.toLowerCase();
@@ -148,7 +175,7 @@ function normalizeSecurityKey(key: string): string {
   normalized = normalized.replace(/^_+|_+$/g, '');
 
   // Cache the result
-  normalizedKeyCache.set(key, normalized);
+  setCachedNormalizedKey(key, normalized);
   return normalized;
 }
 
@@ -403,6 +430,6 @@ export function clearSecurityCache(): void {
 export function getSecurityCacheStats(): { size: number; maxSize: number } {
   return {
     size: normalizedKeyCache.size,
-    maxSize: 10000 // Configurable maximum cache size
+    maxSize: SECURITY_KEY_CACHE_MAX_SIZE,
   };
 }

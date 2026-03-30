@@ -450,4 +450,38 @@ describe('AuthManager', () => {
       });
     });
   });
+
+  describe('Environment Gating for Test Methods', () => {
+    const originalNodeEnv = process.env.NODE_ENV;
+    const originalJestWorkerId = process.env.JEST_WORKER_ID;
+
+    afterEach(() => {
+      process.env.NODE_ENV = originalNodeEnv;
+      process.env.JEST_WORKER_ID = originalJestWorkerId;
+    });
+
+    it('allows test methods when NODE_ENV is test', () => {
+      const manager = new AuthManager();
+      manager.connect('https://vikunja.example.com/api/v1', 'test-token');
+      process.env.NODE_ENV = 'test';
+      delete process.env.JEST_WORKER_ID;
+
+      expect(() => manager.setTestUserId('user-test')).not.toThrow();
+      expect(() => manager.setTestTokenExpiry(new Date('2026-01-01T00:00:00Z'))).not.toThrow();
+    });
+
+    it('blocks test methods when NODE_ENV is development and no jest worker is set', () => {
+      const manager = new AuthManager();
+      manager.connect('https://vikunja.example.com/api/v1', 'test-token');
+      process.env.NODE_ENV = 'development';
+      delete process.env.JEST_WORKER_ID;
+
+      expect(() => manager.setTestUserId('user-dev')).toThrow(
+        'AuthManager test methods can only be used in test environments.',
+      );
+      expect(() => manager.setTestTokenExpiry(new Date('2026-01-01T00:00:00Z'))).toThrow(
+        'AuthManager test methods can only be used in test environments.',
+      );
+    });
+  });
 });

@@ -11,6 +11,7 @@ import { ErrorCode, MCPError, type FilterValue } from '../types';
 import { createValidationError } from '../utils/error-handler';
 import { formatAorpAsMarkdown } from '../utils/response-factory';
 import { createAorpErrorResponse } from '../utils/response-factory';
+import { buildSessionId } from '../utils/session-id';
 
 /**
  * Schema for listing filters
@@ -111,7 +112,7 @@ const ValidateFilterSchema = z.object({
  */
 async function getSessionStorage(authManager: AuthManager): ReturnType<typeof storageManager.getStorage> {
   const session = authManager.getSession();
-  const sessionId = session.apiToken ? `${session.apiUrl}:${session.apiToken.substring(0, 8)}` : 'anonymous';
+  const sessionId = buildSessionId(session.apiUrl, session.apiToken);
   return storageManager.getStorage(sessionId, session.userId, session.apiUrl);
 }
 

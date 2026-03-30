@@ -18,13 +18,14 @@ import type { CreateTaskArgs, UpdateTaskArgs, DeleteTaskArgs, GetTaskArgs } from
 import { TaskFilteringOrchestrator } from './tasks/filtering/index';
 import { createAuthRequiredError, handleFetchError } from '../utils/error-handler';
 import { createSuccessResponse, formatMcpResponse } from '../utils/simple-response';
+import { buildSessionId } from '../utils/session-id';
 
 /**
  * Get session-scoped storage instance
  */
 async function getSessionStorage(authManager: AuthManager): ReturnType<typeof storageManager.getStorage> {
   const session = authManager.getSession();
-  const sessionId = session.apiToken ? `${session.apiUrl}:${session.apiToken.substring(0, 8)}` : 'anonymous';
+  const sessionId = buildSessionId(session.apiUrl, session.apiToken);
   return storageManager.getStorage(sessionId, session.userId, session.apiUrl);
 }
 

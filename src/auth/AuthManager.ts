@@ -152,9 +152,9 @@ export class AuthManager {
    */
   private validateTestEnvironment(): void {
     const nodeEnv = process.env.NODE_ENV;
-    const jestRunning = process.env.JEST_WORKER_ID !== undefined || process.env.NODE_ENV === 'test';
+    const jestRunning = process.env.JEST_WORKER_ID !== undefined;
 
-    if (!jestRunning && nodeEnv !== 'test' && nodeEnv !== 'development') {
+    if (!jestRunning && nodeEnv !== 'test') {
       throw new Error(
         'AuthManager test methods can only be used in test environments. ' +
         'This is a security measure to prevent testing methods from being accessible in production.'
