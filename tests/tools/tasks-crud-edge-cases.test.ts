@@ -216,7 +216,6 @@ describe('Tasks CRUD - Edge Cases and Defensive Programming', () => {
 
       // Should still call updateTask but with no affected fields
       expect(mockClient.tasks.updateTask).toHaveBeenCalledWith(1, {
-        ...mockTask,
         title: 'Original Title',
         description: 'Original Description',
         priority: 1,
@@ -228,6 +227,62 @@ describe('Tasks CRUD - Edge Cases and Defensive Programming', () => {
       const aorpStatus = parsed.getAorpStatus();
       expect(aorpStatus.type).toBe('success');
       expect(markdown).toContain('Task updated successfully');
+    });
+
+    it('should not call updateTask when only labels are updated', async () => {
+      const taskWithBucket = {
+        ...mockTask,
+        bucket_id: 123,
+        position: 4,
+      };
+
+      mockClient.tasks.getTask
+        .mockResolvedValueOnce(taskWithBucket)
+        .mockResolvedValueOnce(taskWithBucket);
+      mockClient.tasks.updateTaskLabels.mockResolvedValue(undefined);
+
+      const result = await updateTask({
+        id: 1,
+        labels: [10, 20],
+      });
+
+      expect(mockClient.tasks.updateTask).not.toHaveBeenCalled();
+      expect(mockClient.tasks.updateTaskLabels).toHaveBeenCalledWith(1, {
+        label_ids: [10, 20],
+      });
+
+      const markdown = result.content[0].text;
+      const parsed = parseMarkdown(markdown);
+      const aorpStatus = parsed.getAorpStatus();
+      expect(aorpStatus.type).toBe('success');
+    });
+
+    it('should send partial payload for core field updates', async () => {
+      const taskWithKanbanFields = {
+        ...mockTask,
+        bucket_id: 123,
+        position: 4,
+        kanban_position: 99,
+      };
+
+      mockClient.tasks.getTask
+        .mockResolvedValueOnce(taskWithKanbanFields)
+        .mockResolvedValueOnce(taskWithKanbanFields);
+      mockClient.tasks.updateTask.mockResolvedValue(taskWithKanbanFields);
+
+      const result = await updateTask({
+        id: 1,
+        title: 'Updated Title',
+      });
+
+      expect(mockClient.tasks.updateTask).toHaveBeenCalledWith(1, {
+        title: 'Updated Title',
+      });
+
+      const markdown = result.content[0].text;
+      const parsed = parseMarkdown(markdown);
+      const aorpStatus = parsed.getAorpStatus();
+      expect(aorpStatus.type).toBe('success');
     });
 
     it('should handle undefined repeat configuration correctly', async () => {

@@ -58,9 +58,13 @@ export async function updateTask(args: UpdateTaskArgs): Promise<{ content: Array
     // Analyze current state and track changes
     const updateState = await analyzeUpdateState(client, args.id, args);
 
-    // Build and apply the update
-    const updateData = buildUpdateData(updateState.currentTask, args);
-    await client.tasks.updateTask(args.id, updateData);
+    // Only call task update endpoint when core task fields are being changed.
+    // Label/assignee-only updates should not post a task payload because that can
+    // unintentionally overwrite server-managed fields (e.g. kanban bucket placement).
+    if (hasCoreTaskFieldUpdates(args)) {
+      const updateData = buildUpdateData(updateState.currentTask, args);
+      await client.tasks.updateTask(args.id, updateData as Task);
+    }
 
     // Update labels if provided
     if (args.labels !== undefined) {
@@ -159,33 +163,47 @@ async function analyzeUpdateState(client: VikunjaClient, taskId: number, args: U
 }
 
 /**
- * Builds the update data object by merging current task data with updates
- * This prevents the API from clearing fields that aren't explicitly updated
+ * Returns true when the request includes direct task field updates.
+ * Relationship updates (labels/assignees) are handled by dedicated endpoints.
  */
-function buildUpdateData(currentTask: Task, args: UpdateTaskArgs): Task {
-  const updateData: Task = {
-    ...currentTask,
-    // Override with any provided updates
-    ...(args.title !== undefined && { title: args.title }),
-    ...(args.description !== undefined && { description: args.description }),
-    ...(args.dueDate !== undefined && { due_date: args.dueDate }),
-    ...(args.priority !== undefined && { priority: args.priority }),
-    ...(args.done !== undefined && { done: args.done }),
-    // Handle repeat configuration for updates
-    ...(args.repeatAfter !== undefined || args.repeatMode !== undefined
-      ? ((): Record<string, unknown> => {
-          const repeatConfig = convertRepeatConfiguration(
-            args.repeatAfter !== undefined ? args.repeatAfter : currentTask.repeat_after,
-            args.repeatMode !== undefined ? args.repeatMode : undefined,
-          );
-          const updates: Record<string, unknown> = {};
-          if (repeatConfig.repeat_after !== undefined)
-            updates.repeat_after = repeatConfig.repeat_after;
-          if (repeatConfig.repeat_mode !== undefined) updates.repeat_mode = repeatConfig.repeat_mode;
-          return updates;
-        })()
-      : {}),
-  };
+function hasCoreTaskFieldUpdates(args: UpdateTaskArgs): boolean {
+  return (
+    args.title !== undefined ||
+    args.description !== undefined ||
+    args.dueDate !== undefined ||
+    args.priority !== undefined ||
+    args.done !== undefined ||
+    args.repeatAfter !== undefined ||
+    args.repeatMode !== undefined
+  );
+}
+
+/**
+ * Builds a partial update payload containing only explicitly provided fields.
+ */
+function buildUpdateData(currentTask: Task, args: UpdateTaskArgs): Partial<Task> {
+  const updateData: Partial<Task> = {};
+
+  if (args.title !== undefined) updateData.title = args.title;
+  if (args.description !== undefined) updateData.description = args.description;
+  if (args.dueDate !== undefined) updateData.due_date = args.dueDate;
+  if (args.priority !== undefined) updateData.priority = args.priority;
+  if (args.done !== undefined) updateData.done = args.done;
+
+  // Handle repeat configuration for updates
+  if (args.repeatAfter !== undefined || args.repeatMode !== undefined) {
+    const repeatConfig = convertRepeatConfiguration(
+      args.repeatAfter !== undefined ? args.repeatAfter : currentTask.repeat_after,
+      args.repeatMode !== undefined ? args.repeatMode : undefined,
+    );
+
+    if (repeatConfig.repeat_after !== undefined) {
+      updateData.repeat_after = repeatConfig.repeat_after;
+    }
+    if (repeatConfig.repeat_mode !== undefined) {
+      (updateData as Record<string, unknown>).repeat_mode = repeatConfig.repeat_mode;
+    }
+  }
 
   return updateData;
 }
