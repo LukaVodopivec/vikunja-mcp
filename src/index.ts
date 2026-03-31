@@ -8,7 +8,8 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
-import { createServer } from 'node:http';
+import { createServer, type IncomingMessage } from 'node:http';
+import { randomUUID } from 'node:crypto';
 import dotenv from 'dotenv';
 
 import { AuthManager } from './auth/AuthManager';
@@ -133,8 +134,69 @@ async function main(): Promise<void> {
       throw new Error(`Invalid MCP_PORT: ${rawPort}`);
     }
 
-    const transport = new StreamableHTTPServerTransport();
-    await server.connect(transport as unknown as Parameters<typeof server.connect>[0]);
+    type SessionContext = {
+      server: McpServer;
+      transport: StreamableHTTPServerTransport;
+    };
+
+    const sessionContexts = new Map<string, SessionContext>();
+
+    const createSessionContext = async (): Promise<SessionContext> => {
+      const sessionServer = new McpServer({
+        name: 'vikunja-mcp',
+        version: '0.2.0',
+      });
+
+      registerTools(
+        sessionServer,
+        authManager,
+        clientFactory ?? undefined,
+        { enableAuthTool: false }
+      );
+
+      let contextRef!: SessionContext;
+      const transport = new StreamableHTTPServerTransport({
+        sessionIdGenerator: () => randomUUID(),
+        onsessioninitialized: (sessionId) => {
+          sessionContexts.set(sessionId, contextRef);
+        },
+        onsessionclosed: async (sessionId) => {
+          const existingContext = sessionContexts.get(sessionId);
+          if (!existingContext) {
+            return;
+          }
+
+          sessionContexts.delete(sessionId);
+          await existingContext.server.close().catch((error: unknown) => {
+            logger.warn(`Failed to close MCP session server ${sessionId}:`, error);
+          });
+        },
+      });
+
+      contextRef = { server: sessionServer, transport };
+      await sessionServer.connect(
+        transport as unknown as Parameters<typeof sessionServer.connect>[0]
+      );
+      return contextRef;
+    };
+
+    const parseRequestBody = async (req: IncomingMessage): Promise<unknown> => {
+      const chunks: Uint8Array[] = [];
+      for await (const chunk of req) {
+        chunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : chunk);
+      }
+
+      if (chunks.length === 0) {
+        return undefined;
+      }
+
+      const payload = Buffer.concat(chunks).toString('utf8').trim();
+      if (!payload) {
+        return undefined;
+      }
+
+      return JSON.parse(payload) as unknown;
+    };
 
     const httpServer = createServer(async (req, res) => {
       try {
@@ -147,7 +209,40 @@ async function main(): Promise<void> {
         }
 
         if (requestUrl.pathname === '/mcp') {
-          await transport.handleRequest(req, res);
+          let parsedBody: unknown;
+          if (req.method === 'POST') {
+            try {
+              parsedBody = await parseRequestBody(req);
+            } catch {
+              res.writeHead(400, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({
+                jsonrpc: '2.0',
+                error: { code: -32700, message: 'Parse error: Invalid JSON' },
+                id: null,
+              }));
+              return;
+            }
+          }
+
+          const rawSessionId = req.headers['mcp-session-id'];
+          const sessionId = Array.isArray(rawSessionId) ? rawSessionId[0] : rawSessionId;
+
+          let sessionContext = sessionId ? sessionContexts.get(sessionId) : undefined;
+          if (!sessionContext && req.method === 'POST') {
+            sessionContext = await createSessionContext();
+          }
+
+          if (!sessionContext) {
+            res.writeHead(404, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+              jsonrpc: '2.0',
+              error: { code: -32001, message: 'Session not found' },
+              id: null,
+            }));
+            return;
+          }
+
+          await sessionContext.transport.handleRequest(req, res, parsedBody);
           return;
         }
 
