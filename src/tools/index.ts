@@ -59,11 +59,17 @@ export {
 export function registerTools(
   server: McpServer, 
   authManager: AuthManager, 
-  clientFactory?: VikunjaClientFactory
+  clientFactory?: VikunjaClientFactory,
+  options?: {
+    enableAuthTool?: boolean;
+  }
 ): void {
   // Register tools with conditional availability based on dependencies and authentication
 
-  registerAuthTool(server, authManager);
+  const enableAuthTool = options?.enableAuthTool ?? true;
+  if (enableAuthTool) {
+    registerAuthTool(server, authManager);
+  }
 
   // Register the comprehensive tasks tool (expected by tests)
   registerTasksTool(server, authManager, clientFactory);
@@ -103,4 +109,3 @@ export function registerTools(
     }
   }
 }
-

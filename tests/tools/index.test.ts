@@ -84,6 +84,19 @@ describe('Tool Registration', () => {
   });
 
   describe('registerTools', () => {
+    it('should skip auth tool registration when disabled via options', () => {
+      const mockClientFactory = { test: 'factory' };
+      mockAuthManager.isAuthenticated.mockReturnValue(true);
+      mockAuthManager.getAuthType.mockReturnValue('api-token');
+
+      registerTools(mockServer, mockAuthManager, mockClientFactory, { enableAuthTool: false });
+
+      expect(registerAuthTool).not.toHaveBeenCalled();
+      expect(registerTasksTool).toHaveBeenCalledTimes(1);
+      expect(registerTasksTool).toHaveBeenCalledWith(mockServer, mockAuthManager, mockClientFactory);
+      expect(registerProjectsTool).toHaveBeenCalledTimes(1);
+    });
+
     it('should register auth and tasks tools without clientFactory', () => {
       // Arrange - test without clientFactory (only auth and tasks tools registered)
       mockAuthManager.isAuthenticated.mockReturnValue(true);

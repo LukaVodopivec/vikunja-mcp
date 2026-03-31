@@ -14,6 +14,12 @@ const MockMcpServer = jest.fn().mockImplementation(() => mockMcpServer);
 
 const mockStdioServerTransport = {};
 const MockStdioServerTransport = jest.fn().mockImplementation(() => mockStdioServerTransport);
+const mockStreamableHTTPServerTransport = {
+  handleRequest: jest.fn(),
+};
+const MockStreamableHTTPServerTransport = jest.fn().mockImplementation(
+  () => mockStreamableHTTPServerTransport
+);
 
 const mockDotenvConfig = jest.fn();
 
@@ -47,6 +53,10 @@ jest.mock('@modelcontextprotocol/sdk/server/mcp.js', () => ({
 
 jest.mock('@modelcontextprotocol/sdk/server/stdio.js', () => ({
   StdioServerTransport: MockStdioServerTransport,
+}));
+
+jest.mock('@modelcontextprotocol/sdk/server/streamableHttp.js', () => ({
+  StreamableHTTPServerTransport: MockStreamableHTTPServerTransport,
 }));
 
 jest.mock('dotenv', () => ({

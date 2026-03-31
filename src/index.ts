@@ -7,6 +7,8 @@
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { createServer } from 'node:http';
 import dotenv from 'dotenv';
 
 import { AuthManager } from './auth/AuthManager';
@@ -23,6 +25,45 @@ const server = new McpServer({
 });
 
 const authManager = new AuthManager();
+type TransportMode = 'stdio' | 'http';
+
+function getTransportMode(argv: string[] = process.argv): TransportMode {
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
+    if (!arg) {
+      continue;
+    }
+
+    if (arg === '--transport' && argv[i + 1]) {
+      return argv[i + 1]?.toLowerCase() === 'http' ? 'http' : 'stdio';
+    }
+    if (arg.startsWith('--transport=')) {
+      const value = arg.slice('--transport='.length).toLowerCase();
+      return value === 'http' ? 'http' : 'stdio';
+    }
+  }
+
+  return process.env.MCP_TRANSPORT?.toLowerCase() === 'http' ? 'http' : 'stdio';
+}
+
+const transportMode = getTransportMode();
+
+function tryAutoAuthenticate(): void {
+  if (!(process.env.VIKUNJA_URL && process.env.VIKUNJA_API_TOKEN)) {
+    return;
+  }
+
+  const connectionMessage = createSecureConnectionMessage(
+    process.env.VIKUNJA_URL,
+    process.env.VIKUNJA_API_TOKEN
+  );
+  logger.info(`Auto-authenticating: ${connectionMessage}`);
+  authManager.connect(process.env.VIKUNJA_URL, process.env.VIKUNJA_API_TOKEN);
+  const detectedAuthType = authManager.getAuthType();
+  logger.info(`Using detected auth type: ${detectedAuthType}`);
+}
+
+tryAutoAuthenticate();
 
 let clientFactory: VikunjaClientFactory | null = null;
 
@@ -44,42 +85,98 @@ export const factoryInitializationPromise = initializeFactory()
   .then(() => {
     try {
       if (clientFactory) {
-        registerTools(server, authManager, clientFactory);
+        if (transportMode === 'http') {
+          registerTools(server, authManager, clientFactory, { enableAuthTool: false });
+        } else {
+          registerTools(server, authManager, clientFactory);
+        }
       } else {
-        registerTools(server, authManager, undefined);
+        if (transportMode === 'http') {
+          registerTools(server, authManager, undefined, { enableAuthTool: false });
+        } else {
+          registerTools(server, authManager, undefined);
+        }
       }
     } catch (error) {
       logger.error('Failed to initialize:', error);
       // Fall back to legacy registration for backwards compatibility
-      registerTools(server, authManager, undefined);
+      if (transportMode === 'http') {
+        registerTools(server, authManager, undefined, { enableAuthTool: false });
+      } else {
+        registerTools(server, authManager, undefined);
+      }
     }
   })
   .catch((error) => {
     logger.warn('Failed to initialize client factory during module load:', error);
-    registerTools(server, authManager, undefined);
+    if (transportMode === 'http') {
+      registerTools(server, authManager, undefined, { enableAuthTool: false });
+    } else {
+      registerTools(server, authManager, undefined);
+    }
   });
-
-if (process.env.VIKUNJA_URL && process.env.VIKUNJA_API_TOKEN) {
-  const connectionMessage = createSecureConnectionMessage(
-    process.env.VIKUNJA_URL, 
-    process.env.VIKUNJA_API_TOKEN
-  );
-  logger.info(`Auto-authenticating: ${connectionMessage}`);
-  authManager.connect(process.env.VIKUNJA_URL, process.env.VIKUNJA_API_TOKEN);
-  const detectedAuthType = authManager.getAuthType();
-  logger.info(`Using detected auth type: ${detectedAuthType}`);
-}
 
 async function main(): Promise<void> {
   await factoryInitializationPromise;
 
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
+  if (transportMode === 'http') {
+    if (!(process.env.VIKUNJA_URL && process.env.VIKUNJA_API_TOKEN)) {
+      throw new Error(
+        'HTTP transport requires VIKUNJA_URL and VIKUNJA_API_TOKEN to be configured.'
+      );
+    }
 
-  logger.info('Vikunja MCP server started');
+    const host = process.env.MCP_HOST ?? '127.0.0.1';
+    const rawPort = process.env.MCP_PORT ?? '9718';
+    const port = Number.parseInt(rawPort, 10);
+    if (!Number.isFinite(port) || port <= 0) {
+      throw new Error(`Invalid MCP_PORT: ${rawPort}`);
+    }
+
+    const transport = new StreamableHTTPServerTransport();
+    await server.connect(transport as unknown as Parameters<typeof server.connect>[0]);
+
+    const httpServer = createServer(async (req, res) => {
+      try {
+        const requestUrl = new URL(req.url ?? '/', `http://${host}:${port}`);
+
+        if (requestUrl.pathname === '/healthz' && req.method === 'GET') {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ status: 'ok' }));
+          return;
+        }
+
+        if (requestUrl.pathname === '/mcp') {
+          await transport.handleRequest(req, res);
+          return;
+        }
+
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Not found' }));
+      } catch (error) {
+        logger.error('HTTP request handler failed:', error);
+        if (!res.headersSent) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+        }
+        res.end(JSON.stringify({ error: 'Internal server error' }));
+      }
+    });
+
+    await new Promise<void>((resolve, reject) => {
+      httpServer.once('error', reject);
+      httpServer.listen(port, host, () => resolve());
+    });
+
+    logger.info(`Vikunja MCP server started (http) on http://${host}:${port}/mcp`);
+    logger.info(`Health check endpoint: http://${host}:${port}/healthz`);
+  } else {
+    const transport = new StdioServerTransport();
+    await server.connect(transport);
+    logger.info('Vikunja MCP server started (stdio)');
+  }
   
   const config = createSecureLogConfig({
-    mode: process.env.MCP_MODE,
+    mode: process.env.MCP_MODE ?? transportMode,
     debug: process.env.DEBUG,
     hasAuth: !!process.env.VIKUNJA_URL && !!process.env.VIKUNJA_API_TOKEN,
     url: process.env.VIKUNJA_URL,
