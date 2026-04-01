@@ -111,6 +111,7 @@ export async function createTask(args: CreateTaskArgs): Promise<{ content: Array
 
     // Create the base task
     const createdTask = await client.tasks.createTask(args.projectId, newTask);
+    logger.info('Task created: id=%d, title=%s', createdTask.id, createdTask.title);
 
     // Track creation state for potential rollback
     const creationState: CreationState = {
@@ -122,6 +123,7 @@ export async function createTask(args: CreateTaskArgs): Promise<{ content: Array
     try {
       // Add labels if provided
       if (args.labels && args.labels.length > 0 && createdTask.id) {
+        logger.info('Adding labels %j to task %d', args.labels, createdTask.id);
         await addLabelsToTask(client, createdTask.id, args.labels);
         creationState.labelsAdded = true;
       }
@@ -192,28 +194,37 @@ export async function createTask(args: CreateTaskArgs): Promise<{ content: Array
 }
 
 /**
- * Adds labels to a task with retry logic for authentication errors
+ * Adds labels to a task one at a time.
+ * Uses individual PUT /tasks/{id}/labels instead of the bulk endpoint
+ * which silently fails on some Vikunja versions (returns 201 but applies nothing).
  */
 async function addLabelsToTask(client: VikunjaClient, taskId: number, labelIds: number[]): Promise<void> {
-  try {
-    await withRetry(
-      () => client.tasks.updateTaskLabels(taskId, {
-        label_ids: labelIds,
-      }),
-      {
-        ...RETRY_CONFIG.AUTH_ERRORS,
-        shouldRetry: (error) => isAuthenticationError(error)
-      }
-    );
-  } catch (labelError) {
-    // Check if it's an auth error after retries
-    if (isAuthenticationError(labelError)) {
-      throw new MCPError(
-        ErrorCode.API_ERROR,
-        `${AUTH_ERROR_MESSAGES.LABEL_CREATE} (Retried ${RETRY_CONFIG.AUTH_ERRORS.maxRetries} times). Task ID: ${taskId}`,
+  for (const labelId of labelIds) {
+    try {
+      await withRetry(
+        () => client.tasks.addLabelToTask(taskId, { task_id: taskId, label_id: labelId }),
+        {
+          ...RETRY_CONFIG.AUTH_ERRORS,
+          shouldRetry: (error) => isAuthenticationError(error)
+        }
       );
+    } catch (labelError: unknown) {
+      // "This label already exists on the task" (Vikunja code 8001) is idempotent — not an error.
+      // The SDK's internal auth retry can cause this when the first attempt succeeds
+      // but the response is misinterpreted, triggering a re-send.
+      const errMsg = labelError instanceof Error ? labelError.message : String(labelError);
+      if (errMsg.includes('already exists')) {
+        logger.debug('Label %d already on task %d — skipping', labelId, taskId);
+        continue;
+      }
+      if (isAuthenticationError(labelError)) {
+        throw new MCPError(
+          ErrorCode.API_ERROR,
+          `${AUTH_ERROR_MESSAGES.LABEL_CREATE} (Retried ${RETRY_CONFIG.AUTH_ERRORS.maxRetries} times). Task ID: ${taskId}, Label ID: ${labelId}`,
+        );
+      }
+      throw labelError;
     }
-    throw labelError;
   }
 }
 
