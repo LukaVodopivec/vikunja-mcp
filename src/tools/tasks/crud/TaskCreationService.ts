@@ -11,7 +11,7 @@ import { isAuthenticationError } from '../../../utils/auth-error-handler';
 import { withRetry, RETRY_CONFIG } from '../../../utils/retry';
 import { transformApiError, handleFetchError } from '../../../utils/error-handler';
 import { sanitizeString } from '../../../utils/validation';
-import { AUTH_ERROR_MESSAGES } from '../constants';
+import { AUTH_ERROR_MESSAGES, COWORKER_PROJECT_ID, WORKSPACE_LABEL_IDS, DOMAIN_LABEL_IDS } from '../constants';
 import { validateDateString, validateId, convertRepeatConfiguration } from '../validation';
 import { createTaskResponse } from './TaskResponseFormatter';
 import { formatAorpAsMarkdown } from '../../../utils/response-factory';
@@ -66,6 +66,24 @@ export async function createTask(args: CreateTaskArgs): Promise<{ content: Array
     // Validate assignee IDs upfront
     if (args.assignees && args.assignees.length > 0) {
       args.assignees.forEach((id) => validateId(id, 'assignee ID'));
+    }
+
+    // Coworker board tasks require workspace + domain labels to prevent mis-routing.
+    // Without these, the daemon either skips the task or routes it to the wrong repo.
+    if (args.projectId === COWORKER_PROJECT_ID) {
+      const labelIds = args.labels ?? [];
+      const hasWorkspace = labelIds.some((id) => WORKSPACE_LABEL_IDS.has(id));
+      const hasDomain = labelIds.some((id) => DOMAIN_LABEL_IDS.has(id));
+      const missing: string[] = [];
+      if (!hasWorkspace) missing.push('workspace (ws-private=1, ws-firefly=2, ws-deeper=3)');
+      if (!hasDomain) missing.push('domain (be=7, fe=8, infra=9, admin=10)');
+      if (missing.length > 0) {
+        throw new MCPError(
+          ErrorCode.VALIDATION_ERROR,
+          `AI Coworker tasks require labels: ${missing.join(' and ')}. ` +
+          `Pass them in the labels array to prevent mis-routing.`,
+        );
+      }
     }
 
     const client = await getClientFromContext();

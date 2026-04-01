@@ -30,6 +30,13 @@ export const AUTH_ERROR_MESSAGES = {
     'This is a known limitation. Other task fields were updated but labels could not be changed.',
 };
 
+// AI Coworker board (project 2) label validation
+// These label IDs must be attached to tasks before the coworker daemon picks them up.
+// Enforcing at creation time prevents tasks from being routed to wrong repos/workspaces.
+export const COWORKER_PROJECT_ID = 2;
+export const WORKSPACE_LABEL_IDS = new Set([1, 2, 3]);  // ws-private, ws-firefly, ws-deeper
+export const DOMAIN_LABEL_IDS = new Set([7, 8, 9, 10]); // be, fe, infra, admin
+
 // Bulk operation constants
 export const BULK_OPERATION_BATCH_SIZE = 10;
 export const MAX_BULK_OPERATION_TASKS = 100;
