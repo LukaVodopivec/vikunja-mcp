@@ -194,37 +194,47 @@ export async function createTask(args: CreateTaskArgs): Promise<{ content: Array
 }
 
 /**
- * Adds labels to a task one at a time.
- * Uses individual PUT /tasks/{id}/labels instead of the bulk endpoint
- * which silently fails on some Vikunja versions (returns 201 but applies nothing).
+ * Adds labels to a task one at a time using direct fetch.
+ *
+ * Bypasses the node-vikunja SDK because its addLabelToTask method has
+ * internal auth retry logic that re-sends successful requests, causing
+ * "label already exists" errors on subsequent labels. Direct fetch with
+ * a single attempt per label avoids this entirely.
  */
 async function addLabelsToTask(client: VikunjaClient, taskId: number, labelIds: number[]): Promise<void> {
+  // Extract API URL and token from the SDK client's internal state.
+  // The tasks service exposes baseUrl and token via the base service class.
+  const baseUrl = (client.tasks as unknown as { baseUrl: string }).baseUrl;
+  const token = (client.tasks as unknown as { token: string | null }).token;
+
   for (const labelId of labelIds) {
-    try {
-      await withRetry(
-        () => client.tasks.addLabelToTask(taskId, { task_id: taskId, label_id: labelId }),
-        {
-          ...RETRY_CONFIG.AUTH_ERRORS,
-          shouldRetry: (error) => isAuthenticationError(error)
-        }
-      );
-    } catch (labelError: unknown) {
-      // "This label already exists on the task" (Vikunja code 8001) is idempotent — not an error.
-      // The SDK's internal auth retry can cause this when the first attempt succeeds
-      // but the response is misinterpreted, triggering a re-send.
-      const errMsg = labelError instanceof Error ? labelError.message : String(labelError);
-      if (errMsg.includes('already exists')) {
-        logger.debug('Label %d already on task %d — skipping', labelId, taskId);
-        continue;
-      }
-      if (isAuthenticationError(labelError)) {
-        throw new MCPError(
-          ErrorCode.API_ERROR,
-          `${AUTH_ERROR_MESSAGES.LABEL_CREATE} (Retried ${RETRY_CONFIG.AUTH_ERRORS.maxRetries} times). Task ID: ${taskId}, Label ID: ${labelId}`,
-        );
-      }
-      throw labelError;
+    const url = `${baseUrl}/tasks/${taskId}/labels`;
+    const response = await fetch(url, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify({ label_id: labelId }),
+    });
+
+    if (response.ok) {
+      logger.debug('Label %d added to task %d', labelId, taskId);
+      continue;
     }
+
+    const body = await response.text();
+
+    // "already exists" (code 8001) is idempotent — not an error
+    if (response.status === 400 && body.includes('already exists')) {
+      logger.debug('Label %d already on task %d — skipping', labelId, taskId);
+      continue;
+    }
+
+    throw new MCPError(
+      ErrorCode.API_ERROR,
+      `Failed to add label ${labelId} to task ${taskId}: ${response.status} ${body.slice(0, 200)}`,
+    );
   }
 }
 
