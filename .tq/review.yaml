@@ -1,0 +1,11 @@
+version: "2"
+repo_profile:
+    id: stack-aware
+packs:
+    - name: node-mcp-plugin-tooling
+      scope: repo
+rollout:
+    mode: shadow
+telemetry:
+    labels:
+        - vikunja-mcp
